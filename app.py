@@ -17,13 +17,13 @@ class StockApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Initialize Database
+        # Initialize Database (includes safe migration for sold tracking columns)
         database.initialize_db()
         
         # Window Configuration
         self.setWindowTitle("vedi - Stock Management")
-        self.setMinimumSize(1100, 700)
-        self.resize(1150, 750)
+        self.setMinimumSize(1150, 720)
+        self.resize(1200, 760)
         
         # Main layout
         self.central_widget = QWidget(self)
@@ -42,14 +42,16 @@ class StockApp(QMainWindow):
         # Initialize Tabs
         self.init_tab_add()
         self.init_tab_edit()
+        self.init_tab_sell()
         self.init_tab_search()
         
-        # Connect tab change event to refresh edit and search lists
+        # Connect tab change event to refresh dropdowns and grids
         self.tabs.currentChanged.connect(self.on_tab_changed)
         
-        # Pre-fill data in search list
+        # Pre-fill data in tables and dropdowns
         self.refresh_search_table()
         self.refresh_edit_dropdown()
+        self.refresh_sell_dropdown()
         
     def setup_header(self):
         header_widget = QWidget()
@@ -189,14 +191,12 @@ class StockApp(QMainWindow):
         self.lbl_add_error.setVisible(False)
 
     def save_new_product(self):
-        # Retrieve values
         name = self.txt_add_name.text().strip()
         stock = self.txt_add_stock.text().strip()
         stock_price = self.txt_add_stock_price.text().strip()
         sold_price = self.txt_add_sold_price.text().strip()
         piece_or_box = self.cmb_add_type.currentText()
         
-        # Validation
         if not name:
             self.show_add_error("Please enter a product name.")
             return
@@ -222,15 +222,12 @@ class StockApp(QMainWindow):
             self.show_add_error("Please enter valid numerical values.")
             return
             
-        # Add to DB
         database.add_item(name, stock_val, stock_p_val, sold_p_val, piece_or_box)
         
-        # Success visual feedback
         self.lbl_add_error.setVisible(False)
         self.card_add_success.setVisible(True)
         self.clear_add_form()
         
-        # Set a timer to hide success label after 3 seconds
         QTimer.singleShot(3000, lambda: self.card_add_success.setVisible(False))
 
     def show_add_error(self, message):
@@ -378,7 +375,6 @@ class StockApp(QMainWindow):
 
     def refresh_edit_dropdown(self, select_id=None):
         """Loads all database products into the edit dropdown."""
-        # Block signals temporarily to prevent index trigger while populating
         self.cmb_edit_select.blockSignals(True)
         self.cmb_edit_select.clear()
         
@@ -393,24 +389,19 @@ class StockApp(QMainWindow):
             display_text = f"{item_name} ({item_type.capitalize()}) [ID: {item_id}]"
             self.cmb_edit_select.addItem(display_text, item_id)
             
-            # Keep track if we need to select a specific product ID
             if select_id and item_id == select_id:
-                selected_index = i + 1  # Offset by 1 for the placeholder item
+                selected_index = i + 1
                 
         self.cmb_edit_select.blockSignals(False)
-        
-        # Select the desired index or default to placeholder
         self.cmb_edit_select.setCurrentIndex(selected_index)
         self.load_selected_product_details()
 
     def load_selected_product_details(self):
-        """Loads the selected product's information into the edit fields."""
         current_data = self.cmb_edit_select.currentData()
         self.lbl_edit_error.setVisible(False)
         self.card_edit_success.setVisible(False)
         
         if current_data is None:
-            # Clear all fields and disable them
             self.txt_edit_name.clear()
             self.txt_edit_stock.clear()
             self.txt_edit_add_stock.clear()
@@ -420,17 +411,15 @@ class StockApp(QMainWindow):
             self.set_edit_fields_enabled(False)
             return
             
-        # Fetch from DB
         item = database.get_item_by_id(current_data)
         if item:
             self.set_edit_fields_enabled(True)
             self.txt_edit_name.setText(item[1])
             self.txt_edit_stock.setText(str(item[2]))
-            self.txt_edit_add_stock.setText("0")  # Default additional stock to 0 when loading
+            self.txt_edit_add_stock.setText("0")
             self.txt_edit_stock_price.setText(str(item[3]))
             self.txt_edit_sold_price.setText(str(item[4]))
             
-            # Select Piece or Box
             t_index = self.cmb_edit_type.findText(item[5].capitalize())
             if t_index >= 0:
                 self.cmb_edit_type.setCurrentIndex(t_index)
@@ -456,7 +445,6 @@ class StockApp(QMainWindow):
         sold_price = self.txt_edit_sold_price.text().strip()
         piece_or_box = self.cmb_edit_type.currentText()
         
-        # Validation
         if not name:
             self.show_edit_error("Please enter a product name.")
             return
@@ -480,7 +468,6 @@ class StockApp(QMainWindow):
                 self.show_edit_error("Stock quantities and prices cannot be negative.")
                 return
                 
-            # Increment stock!
             stock_val = stock_base + stock_add
             if stock_val < 0:
                 self.show_edit_error("Total stock quantity cannot be negative.")
@@ -489,13 +476,11 @@ class StockApp(QMainWindow):
             self.show_edit_error("Please enter valid numerical values.")
             return
             
-        # Update in database
         database.update_item(item_id, name, stock_val, stock_p_val, sold_p_val, piece_or_box)
         
         self.lbl_edit_error.setVisible(False)
         self.card_edit_success.setVisible(True)
         
-        # Refresh the search grid and re-populate edit dropdown, keeping current item selected
         self.refresh_edit_dropdown(item_id)
         
         QTimer.singleShot(3000, lambda: self.card_edit_success.setVisible(False))
@@ -506,7 +491,277 @@ class StockApp(QMainWindow):
         self.card_edit_success.setVisible(False)
 
     # =========================================================================
-    # TAB 3: SEARCH, FILTER, DELETE & VIEW ALL
+    # TAB 3: SELL PRODUCT (NEW!)
+    # =========================================================================
+    def init_tab_sell(self):
+        self.tab_sell = QWidget()
+        tab_layout = QVBoxLayout(self.tab_sell)
+        tab_layout.setContentsMargins(10, 20, 10, 10)
+        
+        # Sell form card frame
+        form_card = QFrame()
+        form_card.setObjectName("cardFrame")
+        form_layout = QVBoxLayout(form_card)
+        form_layout.setContentsMargins(30, 30, 30, 30)
+        form_layout.setSpacing(20)
+        
+        form_title = QLabel("Record Product Sale")
+        form_title.setObjectName("sectionTitle")
+        form_layout.addWidget(form_title)
+        
+        # Dropdown selection panel
+        select_widget = QWidget()
+        select_layout = QHBoxLayout(select_widget)
+        select_layout.setContentsMargins(0, 0, 0, 0)
+        
+        lbl_select = QLabel("Select Product to Sell:")
+        lbl_select.setObjectName("inputLabel")
+        lbl_select.setStyleSheet("margin-right: 10px; font-size: 14px;")
+        
+        self.cmb_sell_select = QComboBox()
+        self.cmb_sell_select.setMinimumWidth(300)
+        self.cmb_sell_select.currentIndexChanged.connect(self.load_selected_sell_details)
+        
+        select_layout.addWidget(lbl_select)
+        select_layout.addWidget(self.cmb_sell_select)
+        select_layout.addStretch()
+        
+        form_layout.addWidget(select_widget)
+        
+        # Divider line
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setFrameShadow(QFrame.Sunken)
+        divider.setStyleSheet("background-color: #dee2e6; max-height: 1px;")
+        form_layout.addWidget(divider)
+        
+        # Grid layout for sales inputs
+        grid = QGridLayout()
+        grid.setSpacing(15)
+        
+        # Row 1: Stock details display labels (read-only)
+        lbl_stock_desc = QLabel("Current Stock in Hand:")
+        lbl_stock_desc.setObjectName("inputLabel")
+        self.lbl_sell_current_stock = QLabel("-")
+        self.lbl_sell_current_stock.setStyleSheet("font-size: 16px; font-weight: bold; color: #475569;")
+        grid.addWidget(lbl_stock_desc, 0, 0)
+        grid.addWidget(self.lbl_sell_current_stock, 1, 0)
+        
+        lbl_type_desc = QLabel("Unit Type:")
+        lbl_type_desc.setObjectName("inputLabel")
+        self.lbl_sell_unit_type = QLabel("-")
+        self.lbl_sell_unit_type.setStyleSheet("font-size: 16px; font-weight: bold; color: #475569;")
+        grid.addWidget(lbl_type_desc, 0, 1)
+        grid.addWidget(self.lbl_sell_unit_type, 1, 1)
+        
+        # Row 2: Sales inputs
+        lbl_qty_desc = QLabel("Quantity to Sell:")
+        lbl_qty_desc.setObjectName("inputLabel")
+        lbl_qty_desc.setStyleSheet("color: #0f172a; font-weight: bold;")
+        self.txt_sell_qty = QLineEdit()
+        self.txt_sell_qty.setPlaceholderText("Enter quantity to sell")
+        self.txt_sell_qty.setValidator(QDoubleValidator(0.0, 999999.0, 2, self))
+        self.txt_sell_qty.textChanged.connect(self.calculate_sales_total)
+        grid.addWidget(lbl_qty_desc, 2, 0)
+        grid.addWidget(self.txt_sell_qty, 3, 0)
+        
+        lbl_price_desc = QLabel("Sale Price Per Unit ($):")
+        lbl_price_desc.setObjectName("inputLabel")
+        lbl_price_desc.setStyleSheet("color: #0f172a; font-weight: bold;")
+        self.txt_sell_price = QLineEdit()
+        self.txt_sell_price.setPlaceholderText("Enter sale price")
+        self.txt_sell_price.setValidator(QDoubleValidator(0.0, 999999.0, 2, self))
+        self.txt_sell_price.textChanged.connect(self.calculate_sales_total)
+        grid.addWidget(lbl_price_desc, 2, 1)
+        grid.addWidget(self.txt_sell_price, 3, 1)
+        
+        # Row 3: Live Sales Total Calculation
+        lbl_total_desc = QLabel("Total Sale Amount:")
+        lbl_total_desc.setObjectName("inputLabel")
+        self.lbl_sell_total_amount = QLabel("$0.00")
+        self.lbl_sell_total_amount.setStyleSheet("font-size: 20px; font-weight: 800; color: #0d6efd;")
+        grid.addWidget(lbl_total_desc, 4, 0)
+        grid.addWidget(self.lbl_sell_total_amount, 5, 0, 1, 2)
+        
+        form_layout.addLayout(grid)
+        
+        # Feedback notifications
+        self.lbl_sell_error = QLabel("")
+        self.lbl_sell_error.setObjectName("errorLabel")
+        self.lbl_sell_error.setVisible(False)
+        form_layout.addWidget(self.lbl_sell_error)
+        
+        self.card_sell_success = QFrame()
+        self.card_sell_success.setObjectName("statusCard")
+        self.card_sell_success.setVisible(False)
+        success_layout = QHBoxLayout(self.card_sell_success)
+        success_layout.setContentsMargins(15, 10, 15, 10)
+        self.lbl_sell_success = QLabel("✔ Sale recorded successfully!")
+        self.lbl_sell_success.setObjectName("successLabel")
+        success_layout.addWidget(self.lbl_sell_success)
+        form_layout.addWidget(self.card_sell_success)
+        
+        # Action Buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        btn_reset = QPushButton("Reset Fields")
+        btn_reset.setObjectName("secondaryBtn")
+        btn_reset.clicked.connect(self.load_selected_sell_details)
+        btn_layout.addWidget(btn_reset)
+        
+        self.btn_sell_action = QPushButton("Record Sale Transaction")
+        self.btn_sell_action.clicked.connect(self.execute_product_sale)
+        btn_layout.addWidget(self.btn_sell_action)
+        
+        form_layout.addLayout(btn_layout)
+        form_layout.addStretch()
+        
+        tab_layout.addWidget(form_card)
+        tab_layout.addStretch()
+        
+        self.tabs.addTab(self.tab_sell, "Sell Product")
+
+    def refresh_sell_dropdown(self, select_id=None):
+        """Populates database items into the sell search selector dropdown."""
+        self.cmb_sell_select.blockSignals(True)
+        self.cmb_sell_select.clear()
+        
+        items = database.get_all_items()
+        self.cmb_sell_select.addItem("-- Select product to sell --", None)
+        
+        selected_index = 0
+        for i, item in enumerate(items):
+            item_id = item[0]
+            item_name = item[1]
+            item_type = item[5]
+            stock_left = item[2]
+            
+            # Show remaining stock inside option row
+            stock_str = f"{int(stock_left)}" if stock_left.is_integer() else f"{stock_left:.2f}"
+            display_text = f"{item_name} (Stock: {stock_str} {item_type}s) [ID: {item_id}]"
+            
+            self.cmb_sell_select.addItem(display_text, item_id)
+            
+            if select_id and item_id == select_id:
+                selected_index = i + 1
+                
+        self.cmb_sell_select.blockSignals(False)
+        self.cmb_sell_select.setCurrentIndex(selected_index)
+        self.load_selected_sell_details()
+
+    def load_selected_sell_details(self):
+        """Loads static stock stats and default selling price for the chosen item."""
+        current_data = self.cmb_sell_select.currentData()
+        self.lbl_sell_error.setVisible(False)
+        self.card_sell_success.setVisible(False)
+        
+        if current_data is None:
+            self.lbl_sell_current_stock.setText("-")
+            self.lbl_sell_unit_type.setText("-")
+            self.txt_sell_qty.clear()
+            self.txt_sell_price.clear()
+            self.lbl_sell_total_amount.setText("$0.00")
+            
+            self.txt_sell_qty.setEnabled(False)
+            self.txt_sell_price.setEnabled(False)
+            self.btn_sell_action.setEnabled(False)
+            return
+            
+        item = database.get_item_by_id(current_data)
+        if item:
+            self.txt_sell_qty.setEnabled(True)
+            self.txt_sell_price.setEnabled(True)
+            self.btn_sell_action.setEnabled(True)
+            
+            stock_left = item[2]
+            stock_str = f"{int(stock_left)}" if stock_left.is_integer() else f"{stock_left:.2f}"
+            
+            self.lbl_sell_current_stock.setText(stock_str)
+            self.lbl_sell_unit_type.setText(item[5].capitalize())
+            
+            # Fill inputs
+            self.txt_sell_qty.clear()
+            self.txt_sell_price.setText(str(item[4])) # Load default retail selling price
+            self.lbl_sell_total_amount.setText("$0.00")
+
+    def calculate_sales_total(self):
+        """Triggers dynamically to render multiplication value as the user types quantities/prices."""
+        qty_str = self.txt_sell_qty.text().strip()
+        price_str = self.txt_sell_price.text().strip()
+        
+        if not qty_str or not price_str:
+            self.lbl_sell_total_amount.setText("$0.00")
+            return
+            
+        try:
+            qty = float(qty_str)
+            price = float(price_str)
+            total = qty * price
+            self.lbl_sell_total_amount.setText(f"${total:.2f}")
+        except ValueError:
+            self.lbl_sell_total_amount.setText("$0.00")
+
+    def execute_product_sale(self):
+        item_id = self.cmb_sell_select.currentData()
+        if item_id is None:
+            self.show_sell_error("Please select a product first.")
+            return
+            
+        qty_str = self.txt_sell_qty.text().strip()
+        price_str = self.txt_sell_price.text().strip()
+        
+        if not qty_str:
+            self.show_sell_error("Please enter the quantity sold.")
+            return
+        if not price_str:
+            self.show_sell_error("Please enter a valid unit selling price.")
+            return
+            
+        try:
+            qty_val = float(qty_str)
+            price_val = float(price_str)
+            
+            if qty_val <= 0:
+                self.show_sell_error("Quantity sold must be greater than zero.")
+                return
+            if price_val < 0:
+                self.show_sell_error("Selling price cannot be negative.")
+                return
+                
+            # Check availability
+            item = database.get_item_by_id(item_id)
+            if not item:
+                self.show_sell_error("Selected product not found.")
+                return
+                
+            current_stock = item[2]
+            if qty_val > current_stock:
+                stock_str = f"{int(current_stock)}" if current_stock.is_integer() else f"{current_stock:.2f}"
+                self.show_sell_error(f"Insufficient stock. Only {stock_str} {item[5]}s available in inventory.")
+                return
+        except ValueError:
+            self.show_sell_error("Please enter valid numerical values.")
+            return
+            
+        # Execute Sale in database
+        database.record_sale(item_id, qty_val, price_val)
+        
+        self.lbl_sell_error.setVisible(False)
+        self.card_sell_success.setVisible(True)
+        
+        # Refresh current dropdown and reset selection to trigger visual updates
+        self.refresh_sell_dropdown(item_id)
+        
+        QTimer.singleShot(3000, lambda: self.card_sell_success.setVisible(False))
+
+    def show_sell_error(self, message):
+        self.lbl_sell_error.setText(f"❌ {message}")
+        self.lbl_sell_error.setVisible(True)
+        self.card_sell_success.setVisible(False)
+
+    # =========================================================================
+    # TAB 4: SEARCH, FILTER, DELETE & VIEW ALL
     # =========================================================================
     def init_tab_search(self):
         self.tab_search = QWidget()
@@ -571,19 +826,33 @@ class StockApp(QMainWindow):
         table_card_layout = QVBoxLayout(self.table_card)
         table_card_layout.setContentsMargins(15, 15, 15, 15)
         
-        # QTableWidget Initialization
+        # QTableWidget Initialization (11 Columns)
         self.tbl_results = QTableWidget()
-        self.tbl_results.setColumnCount(10)
+        self.tbl_results.setColumnCount(11)
         self.tbl_results.setHorizontalHeaderLabels([
-            "ID", "Product Name", "Type", "Stock", 
-            "Stock Cost", "Retail Sell", "Total Cost Value", "Total Sales Value",
+            "ID", "Product Name", "Type", "Stock in Hand", "Sold Qty", 
+            "Cost Price", "Retail Price", "Total Stock Cost", "Total Sales Revenue",
             "Created Date", "Last Updated"
         ])
         
         # Style table headers
         header = self.tbl_results.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.Stretch)  # Product Name stretches
+        
+        # Reduce the default Product Name column width (Index 1) as requested by user
+        self.tbl_results.setColumnWidth(0, 50)   # ID Column
+        self.tbl_results.setColumnWidth(1, 160)  # Compact Product Name
+        self.tbl_results.setColumnWidth(2, 70)   # Type
+        self.tbl_results.setColumnWidth(3, 90)   # Stock in Hand
+        self.tbl_results.setColumnWidth(4, 80)   # Sold Qty
+        self.tbl_results.setColumnWidth(5, 90)   # Cost Price
+        self.tbl_results.setColumnWidth(6, 95)   # Retail Price
+        self.tbl_results.setColumnWidth(7, 110)  # Total Stock Cost
+        self.tbl_results.setColumnWidth(8, 125)  # Total Sales Revenue
+        self.tbl_results.setColumnWidth(9, 130)  # Created Date
+        self.tbl_results.setColumnWidth(10, 130) # Last Updated
+        
+        header.setSectionResizeMode(1, QHeaderView.Stretch) # Only Name dynamically expands to fill remaining space
         
         self.tbl_results.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl_results.setSelectionMode(QTableWidget.SingleSelection)
@@ -619,17 +888,14 @@ class StockApp(QMainWindow):
         self.tabs.addTab(self.tab_search, "Search & Manage")
 
     def on_search_filters_changed(self):
-        """Triggered whenever user inputs search text or changes type selection."""
         self.refresh_search_table()
 
     def reset_search_filters(self):
-        """Clears text searches and resets dropdown filter to 'All'."""
         self.txt_search_query.clear()
         self.cmb_filter_type.setCurrentIndex(0)
         self.refresh_search_table()
 
     def refresh_search_table(self):
-        """Fetches filtered items from database and populates the table."""
         query = self.txt_search_query.text().strip()
         unit_type = self.cmb_filter_type.currentText()
         
@@ -641,20 +907,21 @@ class StockApp(QMainWindow):
         for row_idx, item in enumerate(items):
             self.tbl_results.insertRow(row_idx)
             
-            # Values
+            # Mapping columns
             item_id = item[0]
             name = item[1]
             stock = item[2]
             stock_price = item[3]
             sold_price = item[4]
             piece_or_box = item[5].capitalize()
-            created_at = item[6]
-            updated_at = item[7]
+            sold_qty = item[6]
+            total_revenue = item[7]
+            created_at = item[8]
+            updated_at = item[9]
             
+            # Calculations
             total_stock_value = stock * stock_price
-            total_sold_value = stock * sold_price
             
-            # Map values into table items
             # ID (col 0)
             id_item = QTableWidgetItem(str(item_id))
             id_item.setFlags(id_item.flags() ^ Qt.ItemIsEditable)
@@ -672,57 +939,71 @@ class StockApp(QMainWindow):
             type_item.setTextAlignment(Qt.AlignCenter)
             self.tbl_results.setItem(row_idx, 2, type_item)
             
-            # Stock (col 3)
-            # Format as integer if it represents a whole number, otherwise standard decimal
+            # Stock in Hand (col 3)
             stock_str = f"{int(stock)}" if stock.is_integer() else f"{stock:.2f}"
             stock_item = QTableWidgetItem(stock_str)
             stock_item.setFlags(stock_item.flags() ^ Qt.ItemIsEditable)
             stock_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.tbl_results.setItem(row_idx, 3, stock_item)
             
-            # Stock Price (col 4)
+            # Sold Qty (col 4)
+            sold_qty_str = f"{int(sold_qty)}" if sold_qty.is_integer() else f"{sold_qty:.2f}"
+            sold_item = QTableWidgetItem(sold_qty_str)
+            sold_item.setFlags(sold_item.flags() ^ Qt.ItemIsEditable)
+            sold_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # Make sold qty bold or colorful if it's > 0
+            if sold_qty > 0:
+                sold_item.setForeground(Qt.darkGreen)
+                font = sold_item.font()
+                font.setBold(True)
+                sold_item.setFont(font)
+            self.tbl_results.setItem(row_idx, 4, sold_item)
+            
+            # Cost Price (col 5)
             s_price_item = QTableWidgetItem(f"${stock_price:.2f}")
             s_price_item.setFlags(s_price_item.flags() ^ Qt.ItemIsEditable)
             s_price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.tbl_results.setItem(row_idx, 4, s_price_item)
+            self.tbl_results.setItem(row_idx, 5, s_price_item)
             
-            # Sold Price (col 5)
+            # Retail Price (col 6)
             sold_price_item = QTableWidgetItem(f"${sold_price:.2f}")
             sold_price_item.setFlags(sold_price_item.flags() ^ Qt.ItemIsEditable)
             sold_price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.tbl_results.setItem(row_idx, 5, sold_price_item)
+            self.tbl_results.setItem(row_idx, 6, sold_price_item)
             
-            # Total Cost Value (col 6)
+            # Total Stock Cost (col 7)
             total_cost_item = QTableWidgetItem(f"${total_stock_value:.2f}")
             total_cost_item.setFlags(total_cost_item.flags() ^ Qt.ItemIsEditable)
             total_cost_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.tbl_results.setItem(row_idx, 6, total_cost_item)
+            self.tbl_results.setItem(row_idx, 7, total_cost_item)
             
-            # Total Sales Value (col 7)
-            total_sales_item = QTableWidgetItem(f"${total_sold_value:.2f}")
-            total_sales_item.setFlags(total_sales_item.flags() ^ Qt.ItemIsEditable)
-            total_sales_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.tbl_results.setItem(row_idx, 7, total_sales_item)
+            # Total Sales Revenue (col 8)
+            total_revenue_item = QTableWidgetItem(f"${total_revenue:.2f}")
+            total_revenue_item.setFlags(total_revenue_item.flags() ^ Qt.ItemIsEditable)
+            total_revenue_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if total_revenue > 0:
+                total_revenue_item.setForeground(Qt.blue)
+                font = total_revenue_item.font()
+                font.setBold(True)
+                total_revenue_item.setFont(font)
+            self.tbl_results.setItem(row_idx, 8, total_revenue_item)
             
-            # Created Date (col 8)
+            # Created Date (col 9)
             created_item = QTableWidgetItem(created_at)
             created_item.setFlags(created_item.flags() ^ Qt.ItemIsEditable)
             created_item.setTextAlignment(Qt.AlignCenter)
-            self.tbl_results.setItem(row_idx, 8, created_item)
+            self.tbl_results.setItem(row_idx, 9, created_item)
             
-            # Last Updated (col 9)
+            # Last Updated (col 10)
             updated_item = QTableWidgetItem(updated_at)
             updated_item.setFlags(updated_item.flags() ^ Qt.ItemIsEditable)
             updated_item.setTextAlignment(Qt.AlignCenter)
-            self.tbl_results.setItem(row_idx, 9, updated_item)
+            self.tbl_results.setItem(row_idx, 10, updated_item)
             
         self.tbl_results.blockSignals(False)
-        
-        # Reset actions state since list loaded afresh
         self.on_table_row_selected()
 
     def on_table_row_selected(self):
-        """Called whenever the selection state of the table changes."""
         selected_ranges = self.tbl_results.selectedRanges()
         if not selected_ranges:
             self.lbl_selected_status.setText("Select an item to view actions")
@@ -740,7 +1021,6 @@ class StockApp(QMainWindow):
         self.btn_delete_selected.setEnabled(True)
 
     def edit_selected_item(self):
-        """Switches to the Edit tab and triggers edit pre-filling for the selected item."""
         selected_ranges = self.tbl_results.selectedRanges()
         if not selected_ranges:
             return
@@ -748,14 +1028,10 @@ class StockApp(QMainWindow):
         row = selected_ranges[0].topRow()
         item_id = int(self.tbl_results.item(row, 0).text())
         
-        # Trigger edit dropdown selection update
         self.refresh_edit_dropdown(item_id)
-        
-        # Switch to Tab 2 (Edit tab - Index 1)
-        self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(1) # Go to Edit Tab
 
     def delete_selected_item(self):
-        """Asks for confirmation and deletes the selected stock item from database."""
         selected_ranges = self.tbl_results.selectedRanges()
         if not selected_ranges:
             return
@@ -764,7 +1040,6 @@ class StockApp(QMainWindow):
         item_id = int(self.tbl_results.item(row, 0).text())
         item_name = self.tbl_results.item(row, 1).text()
         
-        # Confirmation Dialog
         reply = QMessageBox.question(
             self, 
             "Confirm Delete", 
@@ -774,11 +1049,10 @@ class StockApp(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            # Delete in Database
             database.delete_item(item_id)
-            # Refresh both views
             self.refresh_search_table()
             self.refresh_edit_dropdown()
+            self.refresh_sell_dropdown()
             
             QMessageBox.information(
                 self,
@@ -791,22 +1065,22 @@ class StockApp(QMainWindow):
     # APP CONTROLS
     # =========================================================================
     def on_tab_changed(self, index):
-        """Runs whenever tabs are changed to ensure fresh data in dropdowns/tables."""
+        """Runs automatically when switching tabs to ensure dropdown/grid items are synchronised."""
         if index == 1: # Edit Tab
-            # Cache the current selected ID if any, and refresh dropdown list
             current_selected = self.cmb_edit_select.currentData()
             self.refresh_edit_dropdown(current_selected)
-        elif index == 2: # Search Tab
+        elif index == 2: # Sell Tab
+            current_selected = self.cmb_sell_select.currentData()
+            self.refresh_sell_dropdown(current_selected)
+        elif index == 3: # Search Tab
             self.refresh_search_table()
 
 def main():
     app = QApplication(sys.argv)
     
-    # Load fonts or configure smooth antialiasing
     font = QFont("Segoe UI", 10)
     app.setFont(font)
     
-    # Apply Premium Theme Styling (QSS)
     app.setStyleSheet(styles.STYLE_SHEET)
     
     window = StockApp()

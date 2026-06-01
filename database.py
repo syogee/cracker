@@ -4,15 +4,16 @@ import os
 DB_NAME = "vedi_stock.db"
 
 def get_db_path():
-    # Keep the database file inside the workspace
-    return os.path.abspath(DB_NAME)
+    # Keep the database file relative to database.py file, preventing working directory shifts
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, DB_NAME)
 
 def initialize_db():
-    """Initializes the SQLite database, creates table, and runs migration for updated_at if needed."""
+    """Initializes SQLite database, creates table, and performs schema migrations for timestamps and sales columns."""
     conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     
-    # Create table with updated_at column
+    # Create table with all columns
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stock_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,16 +22,24 @@ def initialize_db():
             stock_price REAL NOT NULL,
             sold_price REAL NOT NULL,
             piece_or_box TEXT NOT NULL CHECK(piece_or_box IN ('piece', 'box')),
+            sold_qty REAL DEFAULT 0.0,
+            total_revenue REAL DEFAULT 0.0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     
-    # Safe schema migration check to add updated_at to existing databases without data loss
+    # Safe schema migration check to add new columns to existing databases
     cursor.execute("PRAGMA table_info(stock_items)")
     columns = [col[1] for col in cursor.fetchall()]
-    if columns and "updated_at" not in columns:
-        cursor.execute("ALTER TABLE stock_items ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    
+    if columns:
+        if "updated_at" not in columns:
+            cursor.execute("ALTER TABLE stock_items ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        if "sold_qty" not in columns:
+            cursor.execute("ALTER TABLE stock_items ADD COLUMN sold_qty REAL DEFAULT 0.0")
+        if "total_revenue" not in columns:
+            cursor.execute("ALTER TABLE stock_items ADD COLUMN total_revenue REAL DEFAULT 0.0")
         
     conn.commit()
     conn.close()
@@ -40,8 +49,8 @@ def add_item(name, stock, stock_price, sold_price, piece_or_box):
     conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO stock_items (name, stock, stock_price, sold_price, piece_or_box)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO stock_items (name, stock, stock_price, sold_price, piece_or_box, sold_qty, total_revenue)
+        VALUES (?, ?, ?, ?, ?, 0.0, 0.0)
     """, (name, float(stock), float(stock_price), float(sold_price), piece_or_box.lower()))
     new_id = cursor.lastrowid
     conn.commit()
@@ -60,6 +69,21 @@ def update_item(item_id, name, stock, stock_price, sold_price, piece_or_box):
     conn.commit()
     conn.close()
 
+def record_sale(item_id, quantity, sale_price):
+    """Decrements stock, increments sold_qty, accumulates total_revenue, and updates updated_at timestamp."""
+    conn = sqlite3.connect(get_db_path())
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE stock_items
+        SET stock = stock - ?,
+            sold_qty = sold_qty + ?,
+            total_revenue = total_revenue + (? * ?),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (float(quantity), float(quantity), float(quantity), float(sale_price), int(item_id)))
+    conn.commit()
+    conn.close()
+
 def delete_item(item_id):
     """Deletes a stock item by ID."""
     conn = sqlite3.connect(get_db_path())
@@ -69,11 +93,11 @@ def delete_item(item_id):
     conn.close()
 
 def get_all_items():
-    """Fetches all stock items from the database, ordered by ID descending, including timestamps."""
+    """Fetches all stock items from the database, ordered by ID descending, including all metrics and timestamps."""
     conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, name, stock, stock_price, sold_price, piece_or_box, created_at, updated_at
+        SELECT id, name, stock, stock_price, sold_price, piece_or_box, sold_qty, total_revenue, created_at, updated_at
         FROM stock_items
         ORDER BY id DESC
     """)
@@ -86,7 +110,11 @@ def search_items(query="", unit_type="All"):
     conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     
-    sql = "SELECT id, name, stock, stock_price, sold_price, piece_or_box, created_at, updated_at FROM stock_items WHERE 1=1"
+    sql = """
+        SELECT id, name, stock, stock_price, sold_price, piece_or_box, sold_qty, total_revenue, created_at, updated_at 
+        FROM stock_items 
+        WHERE 1=1
+    """
     params = []
     
     if query:
@@ -109,7 +137,7 @@ def get_item_by_id(item_id):
     conn = sqlite3.connect(get_db_path())
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, name, stock, stock_price, sold_price, piece_or_box, created_at, updated_at
+        SELECT id, name, stock, stock_price, sold_price, piece_or_box, sold_qty, total_revenue, created_at, updated_at
         FROM stock_items
         WHERE id = ?
     """, (int(item_id),))
